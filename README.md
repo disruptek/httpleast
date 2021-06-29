@@ -1,2 +1,2 @@
 # httpleast
-an experimental http server
+a demonstration http server
