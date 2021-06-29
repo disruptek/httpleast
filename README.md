@@ -1,2 +1,3 @@
 # httpleast
-a demonstration http server
+
+'twas beauty that killed the beast
