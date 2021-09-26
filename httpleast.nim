@@ -6,7 +6,8 @@ import std/times
 import std/posix
 
 import cps
-import eventqueue
+
+import httpleast/eventqueue
 
 const
   defaultPort = 8080
@@ -84,9 +85,8 @@ proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
   close client
 
 proc server(sock: SocketHandle) {.cps: Cont.} =
+  sock.persist {Read}
   while true:
-    # wait for the socket to be readable
-    sock.iowait {Read}
     # the socket is ready; compose a client
     let (client, address) = accept sock
     if client == osInvalidSocket:
@@ -94,6 +94,9 @@ proc server(sock: SocketHandle) {.cps: Cont.} =
     else:
       # spawn a continuation for the client
       spawn: whelp whassup(client, address)
+
+    # wait for the socket to be readable
+    dismiss()
 
 proc serve(address = defaultAddress; port = defaultPort) =
   ## listen for connections on the `address` and `port`
