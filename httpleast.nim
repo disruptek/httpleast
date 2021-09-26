@@ -2,7 +2,6 @@ import std/strutils
 import std/os
 import std/net
 import std/nativesockets
-import std/times
 import std/posix
 
 import cps
@@ -10,8 +9,8 @@ import cps
 import httpleast/eventqueue
 
 const
-  defaultPort = 8080
-  defaultAddress = "127.1"
+  leastPort {.intdefine.} = 8080
+  leastAddress {.strdefine.} = "127.1"
 
 template errorHandler(e: OSErrorCode; s: string) =
   case e.cint
@@ -98,7 +97,7 @@ proc server(sock: SocketHandle) {.cps: Cont.} =
     # wait for the socket to be readable
     dismiss()
 
-proc serve(address = defaultAddress; port = defaultPort) =
+proc serve(address = leastAddress; port = leastPort) =
   ## listen for connections on the `address` and `port`
   let port = Port(port)
   var socket = newSocket()

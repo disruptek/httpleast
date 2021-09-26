@@ -1,6 +1,5 @@
 import std/strutils
 import std/hashes
-import std/strutils
 import std/macros
 import std/os
 import std/selectors
@@ -15,10 +14,9 @@ import cps
 export Event
 
 const
-  eqDebug {.booldefine, used.} = false   ## emit extra debugging output
-  eqPoolSize {.intdefine, used.} = 64    ## expected pending continuations
-  eqTraceSize {.intdefine, used.} = 1000 ## limit the traceback
-  eqThreads {.intdefine, used.} = 0      ## 0 means "guess"
+  leastDebug {.booldefine, used.} = false   ## emit extra debugging output
+  leastPoolSize {.intdefine, used.} = 64    ## expected pending continuations
+  leastThreads {.intdefine, used.} = 0      ## 0 means "guess"
   threaded = compileOption"threads"
   triggers = not threaded
 
@@ -29,13 +27,13 @@ type
 
   # base continuation type
   Cont* = ref object of Continuation
-    when eqDebug:
+    when leastDebug:
       clock: Clock                  ## time of latest poll loop
       delay: Duration               ## polling overhead
       id: Id                        ## our last registration
       fd: Fd                        ## our last file-descriptor
 
-when eqDebug:
+when leastDebug:
   import std/strutils
 
   when threaded:
@@ -94,11 +92,10 @@ const
   wakeupId = Id(-1)
   invalidId = Id(0)
   invalidFd = Fd(-1)
-  oneMs = initDuration(milliseconds = 1)
 
 var eq {.threadvar.}: EventQueue
 
-template now(): Clock = getMonoTime()
+template now(): Clock {.used.} = getMonoTime()
 
 proc `$`(id: Id): string {.used.} = "{" & system.`$`(id.int) & "}"
 proc `$`(fd: Fd): string {.used.} = "[" & system.`$`(fd.int) & "]"
@@ -146,10 +143,10 @@ proc init() {.inline.} =
         eq.queue = initLoonyQueue[Continuation]().ContQueue
         # create consumer threads to service the queue
         let cores =
-          if eqThreads == 0:
+          if leastThreads == 0:
             countProcessors()
           else:
-            eqThreads
+            leastThreads
         newSeq(eq.threads, cores)
         for thread in eq.threads.mitems:
           createThread(thread, consumer, eq.queue)
@@ -172,8 +169,8 @@ proc init() {.inline.} =
         eq.waiting.put(ready.fd, wakeupId)
 
     # make sure we have a decent amount of space for registrations
-    if len(eq.waiting) < eqPoolSize:
-      eq.waiting = newSeq[Id](eqPoolSize).WaitingIds
+    if len(eq.waiting) < leastPoolSize:
+      eq.waiting = newSeq[Id](leastPoolSize).WaitingIds
 
     eq.lastId = invalidId
     eq.yields = initDeque[Cont]()
@@ -265,7 +262,7 @@ proc stop*() =
 proc trampoline*(c: Cont) =
   ## Run the supplied continuation until it is complete.
   {.gcsafe.}:
-    when eqDebug:
+    when leastDebug:
       var c: Continuation = c
       trampolineIt c:
         debug "🎪tramp", Cont(c), "at", Cont(c).clock
@@ -278,7 +275,7 @@ proc manic(timeout = 0): int =
   eq.eager = false    # make sure we can trigger again
 
   if eq.waiters > 0:
-    when eqDebug:
+    when leastDebug:
       let clock = now()
 
     # ready holds the ready file descriptors and their events.
@@ -299,7 +296,7 @@ proc manic(timeout = 0): int =
           # stop listening on this fd
           unregister(eq.selector, event.fd)
           if take(eq.goto, id, cont):
-            when eqDebug:
+            when leastDebug:
               cont.clock = clock
               cont.delay = now() - clock
               cont.id = id
@@ -333,7 +330,7 @@ proc poll*() =
         # then we'll stop the dispatcher now.
         stop()
       else:
-        when eqDebug:
+        when leastDebug:
           debug "💈"
         # else wait until the next polling interval or signal
         for ready in eq.manager.select(-1):
