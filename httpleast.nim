@@ -11,6 +11,7 @@ import httpleast/eventqueue
 const
   leastPort {.intdefine.} = 8080
   leastAddress {.strdefine.} = "127.1"
+  leastKeepAlive {.booldefine.} = true
 
 template errorHandler(e: OSErrorCode; s: string) =
   case e.cint
@@ -79,7 +80,8 @@ proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
             break
 
       # testing allocators
-      #break goodbye
+      when not leastKeepAlive:
+        break goodbye
 
   close client
 

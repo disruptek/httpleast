@@ -17,6 +17,7 @@ const
   leastPoolSize {.intdefine, used.} = 64    ## expected pending continuations
   leastThreads {.intdefine, used.} = 0      ## 0 means "guess"
   threaded = compileOption"threads"
+  leastRecycle {.booldefine, used.} = false ## recycle continuations
 
 type
   Clock = MonoTime
@@ -87,7 +88,16 @@ proc len*(eq: EventQueue): int =
   eq.waiters + eq.yields.len
 
 when threaded:
+
   proc consumer(q: ContQueue) {.thread.}
+
+  # creating a queue for continuation objects for reuse
+  when leastRecycle:
+    var recycled = ContQueue initLoonyQueue[Continuation]()
+    proc alloc*(U: typedesc[Cont]; E: typedesc[Cont]): E =
+      result = E: recycled.pop()
+      if result.isNil:
+        result = new E
 
 proc init() {.inline.} =
   ## initialize the event queue to prepare it for requests
@@ -126,12 +136,17 @@ proc stop*() =
 proc trampoline*(c: Cont) =
   ## Run the supplied continuation until it is complete.
   {.gcsafe.}:
+    var c: Continuation = c
     when leastDebug:
-      var c: Continuation = c
       trampolineIt c:
         debug "🎪tramp", Cont(c), "at", Cont(c).clock
     else:
-      discard cps.trampoline c
+      c = cps.trampoline c
+
+  # recycling the continuation for reuse
+  when leastRecycle:
+    if not c.dismissed:
+      recycled.push Cont(c)
 
 proc manic(timeout = 0): int =
   if eq.state != Running: return 0
