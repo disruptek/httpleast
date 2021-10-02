@@ -18,6 +18,7 @@ const
   leastThreads {.intdefine, used.} = 0      ## 0 means "guess"
   threaded = compileOption"threads"
   leastRecycle {.booldefine, used.} = false ## recycle continuations
+  leastQueue {.strdefine, used.} = "loony"
 
 type
   Clock = MonoTime
@@ -47,11 +48,28 @@ else:
 when threaded:
   import std/osproc
 
-  import loony
+  import pkg/loony
 
-  type
-    ContQueue = LoonyQueue[Cont]
-    QueueThread = Thread[ContQueue]
+  when leastQueue == "loony":
+    type ContQueue = LoonyQueue[Cont]
+
+    proc needsInit(q: var ContQueue): bool =
+      q.isNil
+
+    proc initQueue(q: var ContQueue) =
+      q = ContQueue initLoonyQueue[Continuation]()
+
+  elif leastQueue == "taskpools":
+    import pkg/taskpools
+    type ContQueue = Taskpool
+
+    proc needsInit(q: var ContQueue): bool =
+      q.isNil
+
+    proc initQueue(q: var ContQueue) =
+      q = Taskpool.new(numThreads = leastThreads)
+
+  type QueueThread = Thread[ContQueue]
 
 type
   Readiness = enum
@@ -93,7 +111,7 @@ when threaded:
 
   # creating a queue for continuation objects for reuse
   when leastRecycle:
-    var recycled = ContQueue initLoonyQueue[Continuation]()
+    var recycled = initLoonyQueue[Continuation]()
     proc alloc*(U: typedesc[Cont]; E: typedesc[Cont]): E =
       result = E: recycled.pop()
       if result.isNil:
@@ -107,17 +125,21 @@ proc init() {.inline.} =
     eq.waiters = 0
 
     when threaded:
-      if eq.queue.isNil:
-        eq.queue = ContQueue initLoonyQueue[Continuation]()
-        # create consumer threads to service the queue
-        let cores =
-          if leastThreads == 0:
-            countProcessors()
-          else:
-            leastThreads
-        newSeq(eq.threads, cores)
-        for thread in eq.threads.mitems:
-          createThread(thread, consumer, eq.queue)
+      if eq.queue.needsInit:
+        initQueue eq.queue
+
+        when leastQueue == "loony":
+          # create consumer threads to service the queue
+          let cores =
+            if leastThreads == 0:
+              countProcessors()
+            else:
+              leastThreads
+          newSeq(eq.threads, cores)
+          for thread in eq.threads.mitems:
+            createThread(thread, consumer, eq.queue)
+        elif leastQueue == "taskpools":
+          discard
 
     eq.state = Stopped
 
@@ -128,6 +150,11 @@ proc stop*() =
 
     # discard the current selector to dismiss any pending events
     close eq.selector
+
+    when leastQueue == "taskpools":
+      if eq.queue.needsInit:
+        shutdown eq.queue
+        eq.queue = nil
 
     # re-initialize the queue
     eq.state = Unready
@@ -144,9 +171,10 @@ proc trampoline*(c: Cont) =
       c = cps.trampoline c
 
   # recycling the continuation for reuse
-  when leastRecycle:
-    if not c.dismissed:
-      recycled.push Cont(c)
+  when threaded:
+    when leastRecycle:
+      if not c.dismissed:
+        recycled.push Cont(c)
 
 proc manic(timeout = 0): int =
   if eq.state != Running: return 0
@@ -197,8 +225,12 @@ proc run*(interval: Duration = DurationZero) =
     discard manic -1
 
   when threaded:
-    for thread in eq.threads.mitems:
-      joinThread thread
+    when leastQueue == "loony":
+      for thread in eq.threads.mitems:
+        joinThread thread
+    elif leastQueue == "taskpools":
+      shutdown eq.queue
+      eq.queue = nil
 
 proc spawn*(c: Cont) =
   ## Queue the supplied continuation `c`; control remains in the calling
@@ -206,9 +238,13 @@ proc spawn*(c: Cont) =
   block done:
     when threaded:
       # spawn to a thread if possible
-      if not eq.queue.isNil:
-        eq.queue.push c
-        break done
+      if not eq.queue.needsInit:
+        when leastQueue == "loony":
+          eq.queue.push c
+          break done
+        elif leastQueue == "taskpools":
+          eq.queue.spawn trampoline(c)
+          break done
 
     # else, spawn to the local eventqueue
     addLast(eq.yields, c)
