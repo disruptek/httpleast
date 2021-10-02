@@ -15,10 +15,10 @@ export Event
 const
   leastDebug {.booldefine, used.} = false   ## emit extra debugging output
   leastPoolSize {.intdefine, used.} = 64    ## expected pending continuations
-  leastThreads {.intdefine, used.} = 0      ## 0 means "guess"
-  threaded = compileOption"threads"
+  leastThreads* {.intdefine, used.} = 0     ## 0 means "guess"
+  threaded* = compileOption"threads"
   leastRecycle {.booldefine, used.} = false ## recycle continuations
-  leastQueue {.strdefine, used.} = "loony"
+  leastQueue* {.strdefine, used.} = "none"
 
 type
   Clock = MonoTime
@@ -48,9 +48,8 @@ else:
 when threaded:
   import std/osproc
 
-  import pkg/loony
-
   when leastQueue == "loony":
+    import pkg/loony
     type ContQueue = LoonyQueue[Cont]
 
     proc needsInit(q: var ContQueue): bool =
@@ -58,6 +57,8 @@ when threaded:
 
     proc initQueue(q: var ContQueue) =
       q = ContQueue initLoonyQueue[Continuation]()
+
+    proc consumer(q: ContQueue) {.thread.}
 
   elif leastQueue == "taskpools":
     import pkg/taskpools
@@ -68,6 +69,15 @@ when threaded:
 
     proc initQueue(q: var ContQueue) =
       q = Taskpool.new(numThreads = leastThreads)
+
+  elif leastQueue == "none":
+    type ContQueue = bool
+
+    proc needsInit(q: var ContQueue): bool =
+      q == false
+
+    proc initQueue(q: var ContQueue) =
+      q = true
 
   type QueueThread = Thread[ContQueue]
 
@@ -105,17 +115,22 @@ proc len*(eq: EventQueue): int =
   ## The number of pending continuations.
   eq.waiters + eq.yields.len
 
-when threaded:
-
-  proc consumer(q: ContQueue) {.thread.}
-
-  # creating a queue for continuation objects for reuse
-  when leastRecycle:
+when leastRecycle:
+  when threaded and leastQueue == "loony":
+    # creating a queue for continuation objects for reuse
     var recycled = initLoonyQueue[Continuation]()
     proc alloc*(U: typedesc[Cont]; E: typedesc[Cont]): E =
       result = E: recycled.pop()
       if result.isNil:
         result = new E
+  else:
+    # creating a stack of continuation objects for reuse
+    var recycled {.threadvar.}: seq[Continuation]
+    proc alloc*(U: typedesc[Cont]; E: typedesc[Cont]): E =
+      if recycled.len == 0:
+        result = new E
+      else:
+        result = E: pop recycled
 
 proc init() {.inline.} =
   ## initialize the event queue to prepare it for requests
@@ -140,6 +155,8 @@ proc init() {.inline.} =
             createThread(thread, consumer, eq.queue)
         elif leastQueue == "taskpools":
           discard
+        elif leastQueue == "none":
+          discard
 
     eq.state = Stopped
 
@@ -152,9 +169,12 @@ proc stop*() =
     close eq.selector
 
     when leastQueue == "taskpools":
-      if eq.queue.needsInit:
+      if not eq.queue.needsInit:
         shutdown eq.queue
         eq.queue = nil
+    elif leastQueue == "none":
+      if not eq.queue.needsInit:
+        eq.queue = false
 
     # re-initialize the queue
     eq.state = Unready
@@ -170,11 +190,13 @@ proc trampoline*(c: Cont) =
     else:
       c = cps.trampoline c
 
-  # recycling the continuation for reuse
-  when threaded:
-    when leastRecycle:
-      if not c.dismissed:
+  when leastRecycle:
+    # recycling the continuation for reuse
+    if not c.dismissed:
+      when threaded and leastQueue == "loony":
         recycled.push Cont(c)
+      else:
+        recycled.add Cont(c)
 
 proc manic(timeout = 0): int =
   if eq.state != Running: return 0
@@ -229,8 +251,12 @@ proc run*(interval: Duration = DurationZero) =
       for thread in eq.threads.mitems:
         joinThread thread
     elif leastQueue == "taskpools":
-      shutdown eq.queue
-      eq.queue = nil
+      if not eq.queue.needsInit:
+        shutdown eq.queue
+        eq.queue = nil
+    elif leastQueue == "none":
+      if not eq.queue.needsInit:
+        eq.queue = false
 
 proc spawn*(c: Cont) =
   ## Queue the supplied continuation `c`; control remains in the calling
@@ -244,6 +270,9 @@ proc spawn*(c: Cont) =
           break done
         elif leastQueue == "taskpools":
           eq.queue.spawn trampoline(c)
+          break done
+        elif leastQueue == "none":
+          addLast(eq.yields, c)
           break done
 
     # else, spawn to the local eventqueue
@@ -270,7 +299,7 @@ proc persist*(c: Cont; file: int | SocketHandle;
   result = iowait(c, file, events)
   eq.serverFd = Fd(file)
 
-when threaded:
+when threaded and leastQueue == "loony":
   proc consumer(q: ContQueue) {.thread.} =
     # setup our local eventqueue
     eq.queue = q

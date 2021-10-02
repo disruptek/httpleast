@@ -99,13 +99,12 @@ proc server(sock: SocketHandle) {.cps: Cont.} =
     # wait for the socket to be readable
     dismiss()
 
-proc serve(address = leastAddress; port = leastPort) =
+proc serve() {.nimcall.} =
   ## listen for connections on the `address` and `port`
-  let port = Port(port)
   var socket = newSocket()
   socket.setSockOpt(OptReusePort, true)
   socket.setSockOpt(OptReuseAddr, true)
-  socket.bindAddr(port, address)
+  socket.bindAddr(leastPort.Port, leastAddress)
   listen socket
   let fd = getFd socket
   setBlocking(fd, false)
@@ -117,4 +116,17 @@ proc serve(address = leastAddress; port = leastPort) =
   run()
 
 when isMainModule:
-  serve()
+  block:
+    when threaded:
+      when leastQueue == "none":
+        # thread N servers across N threads
+        var threads: seq[Thread[void]]
+        newSeq(threads, leastThreads)
+        for thread in threads.mitems:
+          createThread(thread, serve)
+        for thread in threads.mitems:
+          joinThread thread
+        break
+
+    # thread 1 dispatcher for N threads
+    serve()
