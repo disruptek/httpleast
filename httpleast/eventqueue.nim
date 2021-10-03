@@ -180,7 +180,7 @@ proc stop*() =
     eq.state = Unready
     init()
 
-proc trampoline*(c: Cont) =
+proc trampoline*(c: Cont) {.inline.} =
   ## Run the supplied continuation until it is complete.
   {.gcsafe.}:
     var c: Continuation = c
@@ -198,7 +198,7 @@ proc trampoline*(c: Cont) =
       else:
         recycled.add Cont(c)
 
-proc manic(timeout = 0): int =
+proc manic(timeout = 0): int {.inline.} =
   if eq.state != Running: return 0
 
   if eq.waiters > 0:
@@ -259,7 +259,7 @@ proc run*(interval: Duration = DurationZero) =
       if not eq.queue.needsInit:
         eq.queue = false
 
-proc spawn*(c: Cont) =
+proc spawn*(c: Cont) {.inline.} =
   ## Queue the supplied continuation `c`; control remains in the calling
   ## procedure.
   block done:
