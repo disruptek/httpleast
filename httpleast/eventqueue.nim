@@ -224,8 +224,9 @@ proc manic(timeout = 0): int =
           cont.fd = event.fd.Fd
           debug "💈delay", cont.delay
 
-      # queue it for trampolining below
-      eq.yields.addLast cont
+      # run it
+      inc result
+      trampoline cont
 
   if eq.yields.len > 0:
     # run no more than the current number of ready continuations
