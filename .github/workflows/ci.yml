@@ -47,28 +47,3 @@ jobs:
           cd ci
           nimble --accept develop
           nimble test
-
-      - name: Build docs
-        if: ${{ matrix.docs }} == 'true'
-        shell: bash
-        run: |
-          cd ci
-          branch=${{ github.ref }}
-          branch=${branch##*/}
-          nimble doc --project --outdir:docs --path="." \
-            '--git.url:https://github.com/${{ github.repository }}' \
-            '--git.commit:${{ github.sha }}' \
-            "--git.devel:$branch" \
-            httpleast.nim
-          # Ignore failures for older Nim
-          cp docs/{the,}index.html || true
-
-      - name: Publish docs
-        if: >
-          github.event_name == 'push' && github.ref == 'refs/heads/master' &&
-          matrix.os == 'ubuntu-latest' && matrix.nim == 'devel'
-        uses: crazy-max/ghaction-github-pages@v1
-        with:
-          build_dir: ci/docs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
