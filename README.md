@@ -1,5 +1,11 @@
 # httpleast
 
+[![Test Matrix](https://github.com/disruptek/httpleast/workflows/CI/badge.svg)](https://github.com/disruptek/httpleast/actions?query=workflow%3ACI)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/disruptek/httpleast?style=flat)](https://github.com/disruptek/httpleast/releases/latest)
+![Minimum supported Nim version](https://img.shields.io/badge/nim-1.5.1%2B-informational?style=flat&logo=nim)
+[![License](https://img.shields.io/github/license/disruptek/httpleast?style=flat)](#license)
+[![Matrix](https://img.shields.io/badge/chat-on%20matrix-brightgreen)](https://matrix.to/#/#disruptek:matrix.org)
+
 'twas beauty that killed the beast
 
 ## Defines
