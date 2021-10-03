@@ -20,6 +20,18 @@ template errorHandler(e: OSErrorCode; s: string) =
   else:
     raiseOSError e: s
 
+template happyPath(op: untyped; logic: untyped): untyped {.dirty.} =
+  ## do a read or write and handle the result, else run logic.
+  ## we inject girth, which holds the result of your operation.
+  let girth {.inject.} = op
+  case girth
+  of -1: # error
+    errorHandler osLastError(): "i/o error in whassup"
+  of 0: # disconnect
+    break goodbye
+  else:
+    logic
+
 let reply = "HTTP/1.1 200 ok\c\lContent-length: 13\c\lContent-Type: text/plain\c\l\c\lHello, World!"
 
 proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
@@ -46,13 +58,7 @@ proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
         # wait for the client to send us something
         client.iowait {Read}
         # see what the client has to say for themselves
-        let girth = read(client.cint, addr buffer[0], sizeof buffer)
-        case girth
-        of -1: # error
-          errorHandler osLastError(): "unexpected read error"
-        of 0: # disconnect
-          break goodbye
-        else:
+        happyPath read(client.cint, addr buffer[0], sizeof buffer):
           # make an efficient copy of the buffer into the received string
           setLen(received, pos + girth)
           copyMem(addr received[pos], addr buffer[0], girth)
@@ -68,13 +74,7 @@ proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
       while true:
         # wait until we can send a reply
         client.iowait {Write}
-        let girth = write(client.cint, unsafeAddr reply[pos], reply.len - pos)
-        case girth
-        of -1: # error
-          errorHandler osLastError(): "unexpected write error"
-        of 0: # disconnect
-          break goodbye
-        else:
+        happyPath write(client.cint, unsafeAddr reply[pos], reply.len - pos):
           pos += girth
           if pos == reply.len:
             break
