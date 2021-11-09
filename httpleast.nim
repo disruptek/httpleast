@@ -128,8 +128,11 @@ proc whassup(client: Client; address: ClientAddr) {.cps: Cont.} =
 
 when leastQueue != "nim-sys":
   proc server(sock: SocketHandle) {.cps: Cont.} =
-    sock.persist {Read}
+    when leastQueue != "ioqueue":
+      sock.persist {Read}
     while true:
+      when leastQueue == "ioqueue":
+        sock.iowait {Read}
       # the socket is ready; compose a client
       let (client, address) = accept sock
       if client == osInvalidSocket:
@@ -138,8 +141,9 @@ when leastQueue != "nim-sys":
         # spawn a continuation for the client
         spawn: whelp whassup(client, address)
 
-      # wait for the socket to be readable
-      dismiss()
+      when leastQueue != "ioqueue":
+        # wait for the socket to be readable
+        dismiss()
 else:
   proc server() {.cps: Cont.} =
     let sock = listenTcpAsync(leastAddress, leastPort.Port)
@@ -170,7 +174,7 @@ proc serve() {.nimcall.} =
 when isMainModule:
   block service:
     when threaded:
-      when leastQueue == "none":
+      when leastQueue == "none" or leastQueue == "ioqueue":
         # thread N servers across N threads
         var threads: seq[Thread[void]]
         newSeq(threads, leastThreads)
