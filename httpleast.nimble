@@ -5,4 +5,4 @@ license = "MIT"
 
 requires "https://github.com/nim-works/cps > 0.4.0 & < 1.0.0"
 requires "https://github.com/nim-works/loony >= 0.1.5 & < 1.0.0"
-requires "https://github.com/alaviss/nim-sys#e96c36e58e01ae7ff75efbf7547cc1ebe0d46f8e"
+requires "https://github.com/alaviss/nim-sys#390556b7d2ed8e8295fc51ad54f43c110fad2266"
