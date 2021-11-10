@@ -5,7 +5,8 @@ import pkg/cps
 import httpleast/eventqueue
 
 when leastQueue == "nim-sys":
-  import sys/sockets
+  import std/[posix, os]
+  import sys/[sockets, handles]
 
   type
     Client = AsyncConn[TCP]
@@ -145,12 +146,36 @@ when leastQueue != "nim-sys":
         # wait for the socket to be readable
         dismiss()
 else:
-  proc server() {.cps: Cont.} =
-    let sock = listenTcpAsync(leastAddress, leastPort.Port)
+  proc server(sock: AsyncListener[TCP]) {.cps: Cont.} =
     while true:
       let (client, address) = accept sock
       # spawn a continuation for the client
       spawn: whelp whassup(client, address)
+
+  when threaded:
+    proc serveThread(fd: SocketFD) {.thread.} =
+      let sock = AsyncListener[TCP] newAsyncSocket(fd)
+      spawn: whelp server(sock)
+
+      {.gcsafe.}:
+        run()
+
+  proc server() {.cps: Cont.} =
+    let sock = listenTcpAsync(leastAddress, leastPort.Port)
+
+    when threaded:
+      var threads: seq[Thread[SocketFD]]
+      newSeq(threads, leastThreads)
+      for thread in threads.mitems:
+        let fd = SocketFD fcntl(sock.fd.cint, F_DUPFD_CLOEXEC, 0)
+        if fd == InvalidFD:
+          raiseOSError(osLastError())
+        createThread(thread, serveThread, fd)
+      for thread in threads.mitems:
+        joinThread thread
+        break
+
+    server(sock)
 
 proc serve() {.nimcall.} =
   ## listen for connections on the `address` and `port`
