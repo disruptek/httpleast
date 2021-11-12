@@ -23,7 +23,7 @@ else:
 
 const
   leastPort {.intdefine.} = 8080
-  leastAddress {.strdefine.} = "127.1"
+  leastAddress {.strdefine.} = "localhost"
   leastKeepAlive {.booldefine.} = true
   leastDelay {.intdefine.} = 0
 
