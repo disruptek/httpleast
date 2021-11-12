@@ -163,19 +163,23 @@ else:
   proc server() {.cps: Cont.} =
     let sock = listenTcpAsync(leastAddress, leastPort.Port)
 
-    when threaded:
-      var threads: seq[Thread[SocketFD]]
-      newSeq(threads, leastThreads)
-      for thread in threads.mitems:
-        let fd = SocketFD fcntl(sock.fd.cint, F_DUPFD_CLOEXEC, 0)
-        if fd == InvalidFD:
-          raiseOSError(osLastError())
-        createThread(thread, serveThread, fd)
-      for thread in threads.mitems:
-        joinThread thread
-        break
+    block done:
+      when threaded:
+        when defined(posix):
+          # We can't do threading like this on non-posix
+          var threads: seq[Thread[SocketFD]]
+          newSeq(threads, leastThreads)
+          for thread in threads.mitems:
+            let fd = SocketFD fcntl(sock.fd.cint, F_DUPFD_CLOEXEC, 0)
+            if fd == InvalidFD:
+              raiseOSError(osLastError())
+            createThread(thread, serveThread, fd)
+          for thread in threads.mitems:
+            joinThread thread
+            break
+          break done
 
-    server(sock)
+      server(sock)
 
 proc serve() {.nimcall.} =
   ## listen for connections on the `address` and `port`
