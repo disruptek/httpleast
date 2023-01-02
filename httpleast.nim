@@ -4,7 +4,7 @@ import std/net
 import std/nativesockets
 import std/posix
 
-import cps
+import pkg/cps
 
 import httpleast/eventqueue
 
@@ -12,6 +12,7 @@ const
   leastPort {.intdefine.} = 8080
   leastAddress {.strdefine.} = "127.1"
   leastKeepAlive {.booldefine.} = true
+  leastDelay {.intdefine.} = 0
 
 template errorHandler(e: OSErrorCode; s: string) =
   case e.cint
@@ -40,10 +41,10 @@ let reply =
 
 proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
   ## greet a client and find out what the fuck they want
-  var
-    buffer: array[128, char]      # an extra alloc is death
-    received: string              # this will end up in the continuation
-    pos: int                      # with a default size of, like, 2000
+  var buffer: array[256, char]      # an extra alloc is death
+  var pos: int
+  # a string large enough that we may not need a second alloc
+  var received = newStringOfCap 256
 
   # iirc we inherit the flags?
   #setBlocking(client, false)
@@ -70,6 +71,13 @@ proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
           # maybe we've read all the headers?
           if received.endsWith "\c\l\c\l":
             break
+
+      ##
+      ## delay
+      ##
+      when leastDelay > 0:
+        # simulate i/o wait for benchmarking
+        delay leastDelay
 
       ##
       ## reply

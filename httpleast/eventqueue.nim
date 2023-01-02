@@ -180,23 +180,19 @@ proc stop*() =
     eq.state = Unready
     init()
 
-proc trampoline*(c: Cont) {.inline.} =
+proc trampoline*(c: sink Cont) {.inline.} =
   ## Run the supplied continuation until it is complete.
   {.gcsafe.}:
-    var c: Continuation = c
-    when leastDebug:
-      trampolineIt c:
-        debug "🎪tramp", Cont(c), "at", Cont(c).clock
+    when leastRecycle:
+      # recycling the continuation for reuse
+      var c: Cont = Cont cps.trampoline(c)
+      if not c.dismissed:
+        when threaded and leastQueue == "loony":
+          recycled.push c
+        else:
+          recycled.add c
     else:
-      c = cps.trampoline c
-
-  when leastRecycle:
-    # recycling the continuation for reuse
-    if not c.dismissed:
-      when threaded and leastQueue == "loony":
-        recycled.push Cont(c)
-      else:
-        recycled.add Cont(c)
+      discard cps.trampoline(c)
 
 proc manic(timeout = 0): int {.inline.} =
   if eq.state != Running: return 0
@@ -224,16 +220,14 @@ proc manic(timeout = 0): int {.inline.} =
           cont.fd = event.fd.Fd
           debug "💈delay", cont.delay
 
-      # run it
-      inc result
-      trampoline cont
+      # add to the deque of ready-to-run continuations
+      eq.yields.addLast cont
 
-  if eq.yields.len > 0:
-    # run no more than the current number of ready continuations
-    for index in 1 .. eq.yields.len:
-      let cont = popFirst eq.yields
-      inc result
-      trampoline cont
+  # run any ready continuations
+  while eq.yields.len > 0:
+    inc result
+    trampoline:
+      popFirst eq.yields
 
 proc run*(interval: Duration = DurationZero) =
   ## The dispatcher runs with a maximal polling interval; an `interval` of
@@ -259,7 +253,7 @@ proc run*(interval: Duration = DurationZero) =
       if not eq.queue.needsInit:
         eq.queue = false
 
-proc spawn*(c: Cont) {.inline.} =
+proc spawn*(c: sink Cont) {.inline.} =
   ## Queue the supplied continuation `c`; control remains in the calling
   ## procedure.
   block done:
@@ -279,24 +273,32 @@ proc spawn*(c: Cont) {.inline.} =
     # else, spawn to the local eventqueue
     addLast(eq.yields, c)
 
-proc iowait*(c: Cont; file: int | SocketHandle;
+proc iowait*(c: sink Cont; file: int | SocketHandle;
              events: set[Event]): Cont {.cpsMagic.} =
   ## Continue upon any of `events` on the given file-descriptor or
   ## SocketHandle.
-  if len(events) == 0:
-    raise newException(ValueError, "no events supplied")
-  else:
+  if events.len > 0:
     if eq.serverFd.int != file.int:
       registerHandle(eq.selector, file, events = events, data = c)
       inc eq.waiters
       debug "📂file", $Fd(file)
 
-proc persist*(c: Cont; file: int | SocketHandle;
+proc persist*(c: sink Cont; file: int | SocketHandle;
               events: set[Event]): Cont {.cpsMagic.} =
   ## Let the event queue know you want long-running registrations.
   assert eq.serverFd == invalidFd, "call persist only once"
   result = iowait(c, file, events)
   eq.serverFd = Fd(file)
+
+proc delay*(c: sink Cont; ms: Natural): Cont {.cpsMagic.} =
+  ## Do nothing for `ms` milliseconds before continuing.
+  if ms < 1:
+    result = c
+  else:
+    registerTimer(eq.selector, timeout = ms,
+                  oneshot = true, data = c)
+    inc eq.waiters
+    debug "💤sleep", $ms
 
 when threaded and leastQueue == "loony":
   proc consumer(q: ContQueue) {.thread.} =
