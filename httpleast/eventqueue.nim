@@ -279,8 +279,6 @@ proc spawn*(c: Cont) {.inline.} =
     # else, spawn to the local eventqueue
     addLast(eq.yields, c)
 
-proc dismiss*(c: Cont): Cont {.cpsMagic.} = discard
-
 proc iowait*(c: Cont; file: int | SocketHandle;
              events: set[Event]): Cont {.cpsMagic.} =
   ## Continue upon any of `events` on the given file-descriptor or
