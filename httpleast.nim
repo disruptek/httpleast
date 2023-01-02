@@ -116,7 +116,7 @@ proc serve() {.nimcall.} =
   run()
 
 when isMainModule:
-  block:
+  block service:
     when threaded:
       when leastQueue == "none":
         # thread N servers across N threads
@@ -126,7 +126,7 @@ when isMainModule:
           createThread(thread, serve)
         for thread in threads.mitems:
           joinThread thread
-        break
+        break service
 
     # thread 1 dispatcher for N threads
     serve()
