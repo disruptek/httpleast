@@ -32,7 +32,11 @@ template happyPath(op: untyped; logic: untyped): untyped {.dirty.} =
   else:
     logic
 
-let reply = "HTTP/1.1 200 ok\c\lContent-length: 13\c\lContent-Type: text/plain\c\l\c\lHello, World!"
+let reply =
+  when leastKeepAlive:
+    "HTTP/1.1 200 ok\c\lContent-length: 13\c\lContent-Type: text/plain\c\l\c\lHello, World!"
+  else:
+    "HTTP/1.1 200 ok\c\lContent-length: 13\c\lContent-Type: text/plain\c\lConnection: close\c\l\c\lHello, World!"
 
 proc whassup(client: SocketHandle; address: string) {.cps: Cont.} =
   ## greet a client and find out what the fuck they want
