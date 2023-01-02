@@ -2,7 +2,7 @@
 
 [![Test Matrix](https://github.com/disruptek/httpleast/workflows/CI/badge.svg)](https://github.com/disruptek/httpleast/actions?query=workflow%3ACI)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/disruptek/httpleast?style=flat)](https://github.com/disruptek/httpleast/releases/latest)
-![Minimum supported Nim version](https://img.shields.io/badge/nim-1.5.1%2B-informational?style=flat&logo=nim)
+![Minimum supported Nim version](https://img.shields.io/badge/nim-1.6.11%2B-informational?style=flat&logo=nim)
 [![License](https://img.shields.io/github/license/disruptek/httpleast?style=flat)](#license)
 [![Matrix](https://img.shields.io/badge/chat-on%20matrix-brightgreen)](https://matrix.to/#/#disruptek:matrix.org)
 
@@ -40,6 +40,7 @@ Also...
 - `--define:leastAddress="127.1"` listen on given interface.
 - `--define:leastDebug=true` adds extra event queue debugging.
 - `--define:leastKeepAlive=false` turns off connection reuse.
+- `--define:leastDelay=10` waits 10ms before sending a reply.
 
 ## License
 MIT
