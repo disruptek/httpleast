@@ -1,7 +1,6 @@
 import std/strutils
 import std/macros
 import std/os
-import std/selectors
 import std/monotimes
 import std/nativesockets
 import std/tables
@@ -10,8 +9,6 @@ import std/deques
 
 import cps
 
-export Event
-
 const
   leastDebug {.booldefine, used.} = false   ## emit extra debugging output
   leastPoolSize {.intdefine, used.} = 64    ## expected pending continuations
@@ -19,6 +16,15 @@ const
   threaded* = compileOption"threads"
   leastRecycle {.booldefine, used.} = false ## recycle continuations
   leastQueue* {.strdefine, used.} = "none"
+
+when leastQueue == "nim-sys" or leastQueue == "ioqueue":
+  import sys/ioqueue
+
+  export Event
+else:
+  import std/selectors
+
+  export Event
 
 type
   Clock = MonoTime
@@ -79,6 +85,18 @@ when threaded:
     proc initQueue(q: var ContQueue) =
       q = true
 
+  elif leastQueue == "nim-sys" or leastQueue == "ioqueue":
+    import std/options
+    import sys/handles
+
+    type ContQueue = bool
+
+    proc needsInit(q: var ContQueue): bool =
+      q == false
+
+    proc initQueue(q: var ContQueue) =
+      q = true
+
   type QueueThread = Thread[ContQueue]
 
 type
@@ -90,10 +108,13 @@ type
 
   EventQueue = object
     state: Readiness              ## dispatcher readiness
-    selector: Selector[Cont]      ## watches selectable stuff
+    when leastQueue != "nim-sys" and leastQueue != "ioqueue":
+      selector: Selector[Cont]      ## watches selectable stuff
+      waiters: int                  ## a count of selector listeners
+      serverFd: Fd                  ## server's persistent file-descriptor
+    else:
+      runnable: seq[Continuation] ## continuations from sys/ioqueue ready to run
     yields: Deque[Cont]           ## continuations ready to run
-    waiters: int                  ## a count of selector listeners
-    serverFd: Fd                  ## server's persistent file-descriptor
     when threaded:
       queue: ContQueue
       threads: seq[QueueThread]
@@ -113,7 +134,12 @@ proc `==`(a, b: Fd): bool {.borrow, used.}
 
 proc len*(eq: EventQueue): int =
   ## The number of pending continuations.
-  eq.waiters + eq.yields.len
+  when leastQueue != "nim-sys" and leastQueue != "ioqueue":
+    eq.waiters + eq.yields.len
+  else:
+    # ioqueue does not expose "number of waiters", so emulate it by counting a
+    # running queue as 1 waiter.
+    ord(ioqueue.running()) + eq.yields.len
 
 when leastRecycle:
   when threaded and leastQueue == "loony":
@@ -135,9 +161,10 @@ when leastRecycle:
 proc init() {.inline.} =
   ## initialize the event queue to prepare it for requests
   if eq.state == Unready:
-    eq.serverFd = invalidFd
-    eq.selector = newSelector[Cont]()
-    eq.waiters = 0
+    when leastQueue != "nim-sys" and leastQueue != "ioqueue":
+      eq.serverFd = invalidFd
+      eq.selector = newSelector[Cont]()
+      eq.waiters = 0
 
     when threaded:
       if eq.queue.needsInit:
@@ -157,28 +184,35 @@ proc init() {.inline.} =
           discard
         elif leastQueue == "none":
           discard
+        elif leastQueue == "nim-sys":
+          discard
+        elif leastQueue == "ioqueue":
+          discard
 
     eq.state = Stopped
 
 proc stop*() =
   ## Tell the dispatcher to stop, discarding all pending continuations.
-  if eq.state == Running:
-    eq.state = Stopping
+  when leastQueue != "nim-sys" and leastQueue != "ioqueue":
+    if eq.state == Running:
+      eq.state = Stopping
 
-    # discard the current selector to dismiss any pending events
-    close eq.selector
+      # discard the current selector to dismiss any pending events
+      close eq.selector
 
-    when leastQueue == "taskpools":
-      if not eq.queue.needsInit:
-        shutdown eq.queue
-        eq.queue = nil
-    elif leastQueue == "none":
-      if not eq.queue.needsInit:
-        eq.queue = false
+      when leastQueue == "taskpools":
+        if not eq.queue.needsInit:
+          shutdown eq.queue
+          eq.queue = nil
+      elif leastQueue == "none":
+        if not eq.queue.needsInit:
+          eq.queue = false
 
-    # re-initialize the queue
-    eq.state = Unready
-    init()
+      # re-initialize the queue
+      eq.state = Unready
+      init()
+  else:
+    raise newException(Defect, "nim-sys does not support stopping the queue")
 
 proc trampoline*(c: sink Cont) {.inline.} =
   ## Run the supplied continuation until it is complete.
@@ -197,37 +231,57 @@ proc trampoline*(c: sink Cont) {.inline.} =
 proc manic(timeout = 0): int {.inline.} =
   if eq.state != Running: return 0
 
-  if eq.waiters > 0:
-    when leastDebug:
-      let clock = now()
+  when leastQueue != "nim-sys" and leastQueue != "ioqueue":
+    if eq.waiters > 0:
+      when leastDebug:
+        let clock = now()
 
-    # ready holds the ready file descriptors and their events.
-    let ready = select(eq.selector, timeout)
-    for event in ready.items:
-      # see if this is the server's listening socket
-      let isServer = eq.serverFd == Fd(event.fd)
+      # ready holds the ready file descriptors and their events.
+      let ready = select(eq.selector, timeout)
+      for event in ready.items:
+        # see if this is the server's listening socket
+        let isServer = eq.serverFd == Fd(event.fd)
 
-      # retrieve the continuation from the selector
-      var cont = getData(eq.selector, event.fd)
+        # retrieve the continuation from the selector
+        var cont = getData(eq.selector, event.fd)
 
-      if not isServer:
-        # stop listening on this fd
-        unregister(eq.selector, event.fd)
-        dec eq.waiters
-        when leastDebug:
-          cont.clock = clock
-          cont.delay = now() - clock
-          cont.fd = event.fd.Fd
-          debug "💈delay", cont.delay
+        if not isServer:
+          # stop listening on this fd
+          unregister(eq.selector, event.fd)
+          dec eq.waiters
+          when leastDebug:
+            cont.clock = clock
+            cont.delay = now() - clock
+            cont.fd = event.fd.Fd
+            debug "💈delay", cont.delay
 
-      # add to the deque of ready-to-run continuations
-      eq.yields.addLast cont
+        # add to the deque of ready-to-run continuations
+        eq.yields.addLast cont
+  else:
+    if ioqueue.running():
+      eq.runnable.setLen(0)
+
+      poll(eq.runnable):
+        if timeout < 0:
+          none Duration
+        else:
+          some initDuration(milliseconds = timeout)
 
   # run any ready continuations
   while eq.yields.len > 0:
     inc result
     trampoline:
       popFirst eq.yields
+
+  when leastQueue == "nim-sys" or leastQueue == "ioqueue":
+    while eq.runnable.len > 0:
+      let cont = pop eq.runnable
+      inc result
+      when leastQueue == "ioqueue":
+        # When using ioqueue, all continuations are of type `Cont`
+        trampoline Cont(cont)
+      else:
+        discard trampoline cont
 
 proc run*(interval: Duration = DurationZero) =
   ## The dispatcher runs with a maximal polling interval; an `interval` of
@@ -252,6 +306,9 @@ proc run*(interval: Duration = DurationZero) =
     elif leastQueue == "none":
       if not eq.queue.needsInit:
         eq.queue = false
+    elif leastQueue == "nim-sys":
+      if not eq.queue.needsInit:
+        eq.queue = false
 
 proc spawn*(c: sink Cont) {.inline.} =
   ## Queue the supplied continuation `c`; control remains in the calling
@@ -269,6 +326,9 @@ proc spawn*(c: sink Cont) {.inline.} =
         elif leastQueue == "none":
           addLast(eq.yields, c)
           break done
+        elif leastQueue == "nim-sys":
+          addLast(eq.yields, c)
+          break done
 
     # else, spawn to the local eventqueue
     addLast(eq.yields, c)
@@ -277,28 +337,56 @@ proc iowait*(c: sink Cont; file: int | SocketHandle;
              events: set[Event]): Cont {.cpsMagic.} =
   ## Continue upon any of `events` on the given file-descriptor or
   ## SocketHandle.
-  if events.len > 0:
-    if eq.serverFd.int != file.int:
-      registerHandle(eq.selector, file, events = events, data = c)
-      inc eq.waiters
+  when leastQueue == "nim-sys":
+    # While supported by ioqueue, httpleast should not have to use this function at all
+    raise newException(Defect, "iowait() shouldn't be used")
+  elif leastQueue == "ioqueue":
+    if events.len > 1:
+      raise newException(ValueError, "iowait() only supports one event")
+    elif events.len > 0:
+      let event = block:
+        var r: Event
+
+        for i in events:
+          r = i
+          break
+
+        r
+
+      # Wait returns nil to suspend continuation
+      discard wait(c, handles.FD(file), event)
       debug "📂file", $Fd(file)
+  else:
+    if events.len > 0:
+      if eq.serverFd.int != file.int:
+        registerHandle(eq.selector, file, events = events, data = c)
+        inc eq.waiters
+        debug "📂file", $Fd(file)
 
 proc persist*(c: sink Cont; file: int | SocketHandle;
               events: set[Event]): Cont {.cpsMagic.} =
   ## Let the event queue know you want long-running registrations.
-  assert eq.serverFd == invalidFd, "call persist only once"
-  result = iowait(c, file, events)
-  eq.serverFd = Fd(file)
+  when leastQueue == "nim-sys" or leastQueue == "ioqueue":
+    # ioqueue does not support this feature
+    raise newException(Defect, "persist() is not supported")
+  else:
+    assert eq.serverFd == invalidFd, "call persist only once"
+    result = iowait(c, file, events)
+    eq.serverFd = Fd(file)
 
 proc delay*(c: sink Cont; ms: Natural): Cont {.cpsMagic.} =
   ## Do nothing for `ms` milliseconds before continuing.
-  if ms < 1:
-    result = c
+  when leastQueue == "nim-sys" or leastQueue == "ioqueue":
+    # ioqueue does not support this feature yet
+    raise newException(Defect, "delay() is not supported")
   else:
-    registerTimer(eq.selector, timeout = ms,
-                  oneshot = true, data = c)
-    inc eq.waiters
-    debug "💤sleep", $ms
+    if ms < 1:
+      result = c
+    else:
+      registerTimer(eq.selector, timeout = ms,
+                    oneshot = true, data = c)
+      inc eq.waiters
+      debug "💤sleep", $ms
 
 when threaded and leastQueue == "loony":
   proc consumer(q: ContQueue) {.thread.} =
