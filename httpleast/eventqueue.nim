@@ -62,7 +62,7 @@ when threaded:
       q.isNil
 
     proc initQueue(q: var ContQueue) =
-      q = ContQueue initLoonyQueue[Continuation]()
+      q = ContQueue initLoonyQueue[Cont]()
 
     proc consumer(q: ContQueue) {.thread.}
 
