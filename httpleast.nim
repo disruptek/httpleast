@@ -10,7 +10,7 @@ when leastQueue == "nim-sys":
 
   type
     Client = AsyncConn[TCP]
-    ClientAddr = IP4Endpoint
+    ClientAddr = IPEndpoint
 else:
   import std/nativesockets
   import std/net
