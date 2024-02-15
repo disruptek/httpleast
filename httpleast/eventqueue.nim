@@ -268,11 +268,6 @@ proc manic(timeout = 0): int {.inline.} =
           some initDuration(milliseconds = timeout)
 
   # run any ready continuations
-  while eq.yields.len > 0:
-    inc result
-    trampoline:
-      popFirst eq.yields
-
   when leastQueue == "nim-sys" or leastQueue == "ioqueue":
     while eq.runnable.len > 0:
       let cont = pop eq.runnable
@@ -282,6 +277,11 @@ proc manic(timeout = 0): int {.inline.} =
         trampoline Cont(cont)
       else:
         discard trampoline cont
+
+  while eq.yields.len > 0:
+    inc result
+    trampoline:
+      popFirst eq.yields
 
 proc run*(interval: Duration = DurationZero) =
   ## The dispatcher runs with a maximal polling interval; an `interval` of
