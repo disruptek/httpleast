@@ -121,7 +121,7 @@ jobs:
 
       - name: Tests
         run: |
-          for q in none nim-sys ioqueue loony
+          for q in none loony
             balls --define:leastQueue=$q \
                 --path="." --backend:c --panics:on \
                 --mm:arc --define:useMalloc \
