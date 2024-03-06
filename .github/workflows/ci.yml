@@ -2,48 +2,138 @@ name: CI
 on:
   schedule:
     - cron: '30 5 * * *'
-
   push:
-    paths:
-      - '**.cfg'
-      - '**.nims'
-      - '**.nim'
-      - '**.nimble'
-      - 'tests/**'
-      - '.github/workflows/ci.yml'
+    branches:
+      - master
   pull_request:
-    paths:
-      - '**.cfg'
-      - '**.nims'
-      - '**.nim'
-      - '**.nimble'
-      - 'tests/**'
-      - '.github/workflows/ci.yml'
+    branches:
+      - '*'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    # Disable the filter on scheduled runs because we don't want to skip those
+    if: github.event_name != 'schedule'
+    continue-on-error: true # Makes sure errors won't stop us
+    runs-on: ubuntu-latest
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+    steps:
+      # For PRs the path filter check with Github API, so no need to checkout
+      # for them.
+      - if: github.event_name != 'pull_request'
+        name: Checkout (if not PR)
+        uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            src:
+              - '**.cfg'
+              - '**.nims'
+              - '**.nim'
+              - '**.nimble'
+              - 'tests/**'
+              - '.github/workflows/ci.yml'
+
   build:
+    # Build if the files we care about are changed.
+    needs: changes
+    # Make sure to always run regardless of whether the filter success or not.
+    # When the filter fails there won't be an output, so checking for `false`
+    # state is better than checking for `true`.
+    #
+    # The always() function here is required for the job to always run despite
+    # what Github docs said, see: https://github.com/actions/runner/issues/491
+    if: always() && !cancelled() && needs.changes.outputs.src != 'false'
+
     strategy:
       fail-fast: false
       matrix:
-        os: ['macos-latest', 'ubuntu-latest']
-        nim: ['devel']
-    name: '${{ matrix.os }} (${{ matrix.nim }})'
+        os: [ubuntu-latest]
+        compiler:
+          #- name: nim
+          #  version: devel
+          - name: nimskull
+            version: "*"
+
+    name: '${{ matrix.os }} (${{ matrix.compiler.name }} ${{ matrix.compiler.version }})'
     runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: project
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.1
         with:
-          path: ci
+          path: project
 
-      - name: Setup Nim
+      - name: Nim
+        if: matrix.compiler.name == 'nim'
         uses: alaviss/setup-nim@0.1.1
         with:
           path: nim
-          version: ${{ matrix.nim }}
+          version: ${{ matrix.compiler.version }}
 
-      - name: Run tests
-        shell: bash
+      - name: Nimskull
+        id: nimskull
+        if: matrix.compiler.name == 'nimskull'
+        uses: nim-works/setup-nimskull@0.1.0
+        with:
+          nimskull-version: ${{ matrix.compiler.version }}
+
+      - name: Fetch Nimble
+        if: matrix.compiler.name == 'nimskull'
+        uses: actions/checkout@v4.1.1
+        with:
+          path: nimble
+          repository: alaviss/nimble
+          ref: nimskull
+
+      - name: Build Nimble
+        if: matrix.compiler.name == 'nimskull'
         run: |
-          cd ci
+          nim c -d:release -o:"$NIMSKULL_BIN/nimble" src/nimble.nim
+          # Add nimble binary folder to PATH
+          echo "$HOME/.nimble/bin" >> "$GITHUB_PATH"
+        working-directory: nimble
+        env:
+          NIMSKULL_BIN: ${{ steps.nimskull.outputs.bin-path }}
+
+#     - name: Valgrind
+#       run: |
+#         sudo apt-get update
+#         sudo apt install --fix-missing valgrind
+
+      - name: Dependencies
+        run: |
+          nimble --accept install "https://github.com/disruptek/balls"
           nimble --accept develop
-          nimble test
+        env:
+          NIM: ${{ matrix.compiler.name }}
+
+      - name: Tests
+        run: |
+          balls --path="." --backend:c --panics:on \
+                --mm:arc --define:useMalloc \
+                --define:debug --define:release --define:danger
+
+  # Set check-required on this
+  success:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    name: 'All check passes'
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        name: 'Fail when previous jobs fails'
+        run: |
+          echo "::error::One of the previous jobs failed"
+          exit 1
