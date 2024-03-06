@@ -121,7 +121,7 @@ jobs:
 
       - name: Tests
         run: |
-          for q in none loony
+          for q in none loony; do
             balls --define:leastQueue=$q \
                 --path="." --backend:c --panics:on \
                 --mm:arc --define:useMalloc \
