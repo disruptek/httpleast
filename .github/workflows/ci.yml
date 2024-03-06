@@ -121,9 +121,12 @@ jobs:
 
       - name: Tests
         run: |
-          balls --path="." --backend:c --panics:on \
+          for q in none nim-sys ioqueue loony
+            balls --define:leastQueue=$q \
+                --path="." --backend:c --panics:on \
                 --mm:arc --define:useMalloc \
-                --define:debug --define:release --define:danger
+                --define:debug --define:release --define:danger || exit 1
+          done
 
   # Set check-required on this
   success:
