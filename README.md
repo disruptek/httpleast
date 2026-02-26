@@ -29,10 +29,18 @@ the specified number of threads. Each thread runs as many continuations as
 remain in the running state, competing to receive new continuations from the
 queue.
 
+- `--define:leastQueue=ioqueue`
+
+Based on `none`, but have `std/selectors` substituted with [`sys/ioqueue`](https://alaviss.github.io/nim-sys/ioqueue.html) as the I/O multiplexer backend.
+
+- `--define:leastQueue=nim-sys`
+
+Based on `ioqueue`, but substitutes `std/nativesockets` for [`sys/sockets`](https://alaviss.github.io/nim-sys/sockets.html) to implement the server.
+
 - `--define:leastRecycle=true` reduces continuation allocs.
 
 When using Loony, recycle completed continuations via a multi-threaded queue;
-when using no queue, recycle completed continuations with a thread-local stack.
+when using no queue or `ioqueue`, recycle completed continuations with a thread-local stack.
 
 Also...
 
